@@ -1,5 +1,26 @@
 import math
 THRESHOLD = [0.01 for i in range(10)]
+
+
+def Hawkes_predict(series, tr, tp):
+
+    paras = Hawkes_fit_EM(series[:(tr+1)])
+    # according to TingTing He et al. paper
+    predict = []*2
+    for n in range(2):
+        predict[n] = 1 - pow((tp-tr),-paras[n]) + paras[2*(n+1)]*(1-math.exp(-pow(tp-tr,2)/2/pow(paras[n*2+6],2)))\
+        + paras[5-n*2]*(1-math.exp(-pow(tp-tr,2)/2/pow(paras[9-n*2],2)))
+    print series[tp][0], predict[0]
+    print series[tp][1], predict[1]
+    abs_err = [abs(predict[i]-series[tp][i]) for i in range(2)]
+    rel_err = [0 for i in range(2)]
+    for i in range(2):
+        if series[tp][i]>0
+            rel_err[i] = abs_err[i]/series[tp][i]
+        else:
+            rel_err[i] = abs_err[i]
+    return abs_err, rel_err
+
 def Hawkes_fit_EM(series):
 
     # para_list
@@ -30,8 +51,8 @@ def Hawkes_fit_EM(series):
 
 def paras_init(paras):
 
-    paras[0] = 1.0 # alpha1
-    paras[1] = 1.0 # alpha2
+    paras[0] = 0.8 # alpha1
+    paras[1] = 0.8 # alpha2
     paras[2] = 0.8 # yita11
     paras[3] = 0.8 # yita12
     paras[4] = 0.8 # yita22
@@ -107,4 +128,4 @@ def converge(improve, THRESHOLD):
 def series_prep():
     pass
 
-Hawkes_fit_EM(series)
+Hawkes_predict(series, tr, tp)
