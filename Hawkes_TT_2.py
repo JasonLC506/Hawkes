@@ -78,6 +78,7 @@ def lamda_update(paras, lamda):
             lamda[n][i] = paras[n+2]*j/paras[n+6]/paras[n+6]*math.exp(0-(j*j)/2/paras[n+6]/paras[n+6])
     for n in [4,5]:
         for i in range(len(lamda[n])):
+            j = i + 1
             lamda[n][i] = paras[n-4]/pow(j,(paras[n-4]+1))
     return lamda
 
