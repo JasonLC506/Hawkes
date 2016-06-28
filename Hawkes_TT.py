@@ -1,7 +1,8 @@
 import math
 THRESHOLD = [0.01 for i in range(10)]
 MAX_ITERATION = 1000
-
+T0 = 1.5 # time of first stamp (simple test shows different T0>1.0 influence predicted value only a little)
+EPSILON = 1.0e-7
 
 def Hawkes_predict(series, tr, tp):
     # according to TingTing He et al. paper
@@ -48,35 +49,55 @@ def Hawkes_fit_EM(series):
 
     paras = paras_init(paras)
     paras_old = paras
+    lamda = lamda_update(paras, lamda)
     improve = [THRESHOLD[i]+0.1 for i in range(len(THRESHOLD)) ]
+    likelihood_old = 0
     Q_old = 0
     iteration = 0
     while not converge(improve, THRESHOLD):
+
+        ############## likelihood test #############
         if iteration == 0:
             pass
         else:
-            Q = Q_update(lamda, series, prob, paras)
-            print "Q value:", Q
-            if Q_old != 0 and Q < Q_old:
-                print "error: decreasing Q"
+            likelihood = likelihood_update(lamda, series, paras)
+            print "likelihood value:", likelihood
+            if likelihood_old != 0 and likelihood < likelihood_old:
+                print "error: decreasing likelihood"
                 print paras_old
                 # return paras_old
-            Q_old = Q
+            likelihood_old = likelihood
+
+        ############# E step #####################
+
+        prob = prob_update(lamda, series, prob)
+
+        ############# M step #####################
 
         paras_old[:] = paras[:]
-        lamda = lamda_update(paras, lamda)
-        prob  = prob_update(lamda, series, prob)
-
+        ########## Q test in M step #########
+        # Q_old = Q_update(lamda, series, prob, paras)
         paras_new = paras_update(prob, series, paras)
+        lamda = lamda_update(paras_new, lamda)
         improve = improve_cal(paras_old, paras_new)
         paras = paras_new
+        ########### Q test in M step #########
+        # Q = Q_update(lamda, series, prob, paras)
+        # if Q< Q_old:
+        #     print "error: decreasing Q"
+        #     print "Q_old:", Q_old, " Q:", Q
 
         iteration +=1
         if iteration >= MAX_ITERATION:
             break
     if converge(improve, THRESHOLD):
         print "convergent"
+        print "iteration:", iteration
         print "paras:", paras
+    else:
+        print "not convergent"
+        print "paras:", paras
+        print "paras_old", paras_old
     return paras
 
 def paras_init(paras):
@@ -97,13 +118,18 @@ def paras_init(paras):
 def lamda_update(paras, lamda):
 
     for n in range(4):
-        for i in range(len(lamda[n])):
-            j = i+1
-            lamda[n][i] = paras[n+2]*j/paras[n+6]/paras[n+6]*math.exp(0-(j*j)/2/paras[n+6]/paras[n+6])
+        for i in range(len(lamda[n])-1):
+            j = float(i+1)
+            lamda[n][i+1] = paras[n+2]*j/paras[n+6]/paras[n+6]*math.exp(0-(j*j)/2/paras[n+6]/paras[n+6])
+        lamda[n][0] = 0
     for n in [4,5]:
         for i in range(len(lamda[n])):
-            j = i+1
-            lamda[n][i] = paras[n-4]/pow(j,(paras[n-4]+1))
+            #### here series begin from 0
+            j = float(i+T0)
+            try:
+                lamda[n][i] = paras[n-4]/pow(j,(paras[n-4]+1))
+            except OverflowError, e:
+                print "overflow of immigrant term,", paras[n-4]
     return lamda
 
 
@@ -116,11 +142,15 @@ def prob_update(lamda, series, prob):
         lamda_sum[0] = sum([series[j][0]*lamda[0][i-j] + series[j][1]*lamda[3][i-j] for j in range(i)]) + lamda[4][i]
         lamda_sum[1] = sum([series[j][1]*lamda[2][i-j] + series[j][0]*lamda[1][i-j] for j in range(i)]) + lamda[5][i]
         for n in range(4):
-            if n ==0 or n == 1:
+            if n == 0 or n == 1:
                 tag = 0
             else:
                 tag = 1
-            prob[n][i] = [series[j][tag]*lamda[n][i-j]/lamda_sum[tag] for j in range(i)]
+            if n == 0 or n == 3:
+                tagtarget = 0
+            else:
+                tagtarget = 1
+            prob[n][i] = [series[j][tag]*lamda[n][i-j]/lamda_sum[tagtarget] for j in range(i)]
         for n in [4,5]:
             prob[n][i] = lamda[n][i]/lamda_sum[n-4]
     return prob
@@ -128,15 +158,16 @@ def prob_update(lamda, series, prob):
 
 def paras_update(prob, series, paras):
 
-    paras_new = [0 for i in range(len(paras))]
+    paras_new = [paras[i] for i in range(len(paras))]
     for n in [0,1]:
-        denominator = sum([math.log(i+1)*prob[n+4][i]*series[i][n] for i in range(len(prob[n+4]))])
+        denominator = sum([math.log(float(i+T0))*prob[n+4][i]*series[i][n] for i in range(len(series))])
         if denominator == 0:
             paras_new[n] = 0
         else:
             paras_new[n] = sum([prob[n+4][j]*series[j][n] for j in range(len(series))])/denominator
-    for n in range(2,6):
-        series_sum = [sum([series[j][i] for j in range(len(series))]) for i in [0,1]]
+
+    series_sum = [sum([series[j][i] for j in range(len(series))]) for i in [0, 1]]
+    for n in range(2, 6):
         denominator = series_sum[(n-2)/2]
         if denominator ==0:
             paras_new[n] = 0
@@ -155,8 +186,8 @@ def paras_update(prob, series, paras):
         if denominator == 0:
             paras_new[n] = paras[n]
         else:
-            paras_new[n] = sum([sum([prob[n - 6][i][j] * math.pow(i - j, 2) for j in range(i)])*series[i][tag]\
-                                for i in range(len(prob[n - 6]))]) / denominator
+            paras_new[n] = math.sqrt(sum([sum([prob[n - 6][i][j] * math.pow(i - j, 2) / 2.0 for j in range(i)])*series[i][tag]\
+                                for i in range(len(prob[n - 6]))]) / denominator)
     return paras_new
 
 
@@ -164,10 +195,10 @@ def improve_cal(paras_old, paras_new):
 
     improve = [0 for i in range(len(paras_old))]
     for i in range(len(paras_old)):
-        if paras_old[i] > 0:
-            improve[i] = (paras_new[i]-paras_old[i])/paras_old[i]
+        if paras_old[i] > EPSILON:
+            improve[i] = abs(paras_new[i]-paras_old[i])/paras_old[i]
         else:
-            improve[i] = paras_new[i] - paras_old[i]
+            improve[i] = abs(paras_new[i] - paras_old[i])
     return improve
 
 
@@ -178,19 +209,45 @@ def converge(improve, THRESHOLD):
     return 1
 
 def series_prep():
-    series = [[1,2],[3,4],[5,5],[6,9],[12,18],[16,18],[18,16],[16,14],[14,13],[13,12],[11,11],[10,10],[10,10],[9,9],[8,8],[8,8],[7,7],[7,7],[7,7],[6,6],[6,6],[6,6],[6,6],[4,4],[4,4]]
+    series = [[1,2],[3,4],[5,5],[6,9],[12,18],[16,18],[18,16],[19,14],[20,13],[13,12],[11,11],[10,10],[10,10],[9,9],[8,8],[8,8],[7,7],[7,7],[7,7],[6,6],[6,6],[6,6],[6,6],[4,4],[4,4]]
+    for i in range(len(series)):
+        temp = series[i][0]
+        series[i][0] = series[i][1]
+        series[i][1] = temp
     return series
 
-def Q_update(lamda, series, prob, paras):
-    Q = 0
+def likelihood_update(lamda, series, paras):
+    likelihood = 0
     lamda_sum = [[0 for n in range(2)] for i in range(len(series))]
     series_sum = [sum([series[j][i] for j in range(len(series))]) for i in [0, 1]]
     for i in range(len(series)):
         lamda_sum[i][0] = sum([series[j][0] * lamda[0][i - j] + series[j][1] * lamda[3][i - j] for j in range(i)]) + lamda[4][i]
         lamda_sum[i][1] = sum([series[j][1] * lamda[2][i - j] + series[j][0] * lamda[1][i - j] for j in range(i)]) + lamda[5][i]
     for n in range(2):
-        Q += (sum([series[i][n]*math.log(lamda_sum[i][n]) for i in range(len(series))])-
+        likelihood += (sum([series[i][n]*math.log(lamda_sum[i][n]) for i in range(len(series))])-
               series_sum[n]*(1+paras[n*2+2])- series_sum[1-n]*paras[5-n*2])
+    return likelihood
+
+def Q_update(lamda, series, prob, paras):
+    Q = 0
+    N = len(series)
+    term = [[0 for j in range(N)] for i in range(6)]
+    for nn in range(4):
+        for i in range(N):
+            term[nn][i] = sum([prob[nn][i][j]*math.log(lamda[nn][i-j]) for j in range(i)])
+    for nn in [4,5]:
+        for i in range(N):
+            term[nn][i] = prob[nn][i]*math.log(lamda[nn][i])
+    for nn in range(6):
+        if nn == 0 or nn == 3 or nn == 4:
+            tag = 0
+        else:
+            tag = 1
+        Q += sum([term[nn][i] * series[i][tag] for i in range(N)])
+    series_sum = [sum([series[j][i] for j in range(len(series))]) for i in [0, 1]]
+    for n in range(2):
+        Q = Q - series_sum[n]*(1+paras[n*2+2])- series_sum[1-n]*paras[5-n*2]
     return Q
+
 if __name__ == "__main__":
     Hawkes_predict(series_prep(), 20,21)
