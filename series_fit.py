@@ -5,7 +5,7 @@ def series_fetch():
     file1 = open("viewCount","r")
     list_series_1 = cPickle.load(file1)
     file1.close()
-    file2 = open("likeCount","r")
+    file2 = open("likeCountaso","r")
     list_series_2 = cPickle.load(file2)
     file2.close()
     list_series = []
@@ -30,7 +30,7 @@ def batch_predict(list_series):
             continue
         abs_errs.append(abs_err)
         rel_errs.append(rel_err)
-
+    print "# of legal series", N
     mean_abs_err = [sum(abs_errs[:][i]) for i in range(2)]
     mean_rel_err = [sum(rel_errs[:][i]) for i in range(2)]
     print mean_abs_err, mean_rel_err

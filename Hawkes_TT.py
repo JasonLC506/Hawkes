@@ -1,23 +1,40 @@
 import math
+import random
+
 THRESHOLD = [0.01 for i in range(10)]
 MAX_ITERATION = 1000
 T0 = 1.5 # time of first stamp (simple test shows different T0>1.0 influence predicted value only a little)
 EPSILON = 1.0e-7
+DIM = 2
+key_map = [[0 for nn in range(2)] for nnn in range(2)]
+for nr in range(2):
+    for np in range(2):
+        key_map[nr][np] = int(nr + np * (1- nr*2) + 2 * nr)
+print key_map
 
 def Hawkes_predict(series, tr, tp):
-    # according to TingTing He et al. paper
+
     if len(series)<= tp:
         print "too short series"
         return [-1,-1],[-1,-1]
-    paras = Hawkes_fit_EM(series[:tr])
-
-    predict = [0 for n in range(2)]
     orgvalue = [sum([series[i][n] for i in range(tp)]) for n in range(2)]
     orgref = [sum([series[i][n] for i in range(tr)]) for n in range(2)]
-    for n in range(2):
-        predict[n] = 1 - pow((tp-tr),-paras[n]) + paras[2*(n+1)]*(1-math.exp(-pow(tp-tr,2)/2/pow(paras[n*2+6],2)))\
-        + paras[5-n*2]*(1-math.exp(-pow(tp-tr,2)/2/pow(paras[9-n*2],2)))
-        predict[n] += orgref[n]
+    if orgref[0] == 0 or orgref[1] == 0:
+        print "zero series"
+        return [-1,-1],[-1,-1]
+    paras = Hawkes_fit_EM(series[:tr])
+
+
+    # ########### according to TingTing He et al. paper #######
+    # predict = [0 for n in range(2)]
+
+    # for n in range(2):
+    #     predict[n] = 1 - pow((tp-tr),-paras[n]) + paras[2*(n+1)]*(1-math.exp(-pow(tp-tr,2)/2/pow(paras[n*2+6],2)))\
+    #     + paras[5-n*2]*(1-math.exp(-pow(tp-tr,2)/2/pow(paras[9-n*2],2)))
+    #     predict[n] += orgref[n]
+    ######## According to definition of Hawkes process #######
+    predict = predict_cal(series, paras, tr, tp)
+
     print "origin value for series 0: ", orgvalue[0], ", predicted value", predict[0], ", origin ref value:", orgref[0]
     print "origin value for series 1: ", orgvalue[1], ", predicted value", predict[1], ", origin ref value:", orgref[1]
     abs_err = [abs(predict[i]-orgvalue[i]) for i in range(2)]
@@ -30,6 +47,31 @@ def Hawkes_predict(series, tr, tp):
     print "abs_err", abs_err
     print "rel_err", rel_err
     return abs_err, rel_err
+
+def predict_cal(series, paras, tr, tp):
+    dimension = len(series[0])
+    orgref = [sum([series[i][n] for i in range(tr)]) for n in range(2)]
+    predict = [orgref[n] for n in range(dimension)]
+    for np in range(dimension):
+        for nr in range(dimension):
+            influence_factor = [influence_factor_cal(paras, t, tr, tp, nr, np) for t in range(tr)]
+            # print "nr, np:", nr, np
+            # print influence_factor
+            predict[np] += sum([influence_factor[t] * series[t][nr] for t in range(tr)])
+        predict[np] += influence_factor_cal(paras, 0, tr, tp, -1, np)
+    return predict
+
+def influence_factor_cal(paras, t, tr, tp, nr, np):
+
+    if nr == -1:
+        return  (pow(tr+T0, -paras[np]) - pow(tp+T0, -paras[np]))
+    else:
+        return cross_influence_cal(paras[key_map[nr][np]+2], paras[key_map[nr][np]+6], t, tr, tp)
+
+def cross_influence_cal(yita, sigma, t, tr, tp):
+    return yita * (math.exp(-pow(tr-t,2)/2/pow(sigma,2)) - math.exp(-pow(tp-t ,2)/2/pow(sigma,2)))
+
+
 
 def Hawkes_fit_EM(series):
 
@@ -47,71 +89,84 @@ def Hawkes_fit_EM(series):
     lamda = [[0 for i in range(N)] for j in range(6)] # 0 for 11, 1 for 12, 2 for 22, 3 for 21, 4 for 1, 5 for 2
     prob = [[0 for i in range(N)] for j in range(6)]
 
-    paras = paras_init(paras)
-    paras_old = paras
-    lamda = lamda_update(paras, lamda)
-    improve = [THRESHOLD[i]+0.1 for i in range(len(THRESHOLD)) ]
-    likelihood_old = 0
-    Q_old = 0
-    iteration = 0
-    while not converge(improve, THRESHOLD):
+    paras_best = [1.0 for i in range(10)]
+    likelihood_largest = 0
+    for randomtry in range(10):
+        paras = paras_init(paras)
+        paras_old = paras
+        lamda = lamda_update(paras, lamda)
+        improve = [THRESHOLD[i]+0.1 for i in range(len(THRESHOLD)) ]
+        likelihood_old = 0
+        Q_old = 0
+        iteration = 0
+        while not converge(improve, THRESHOLD):
 
-        ############## likelihood test #############
-        if iteration == 0:
-            pass
+            ############## likelihood test #############
+            if iteration == 0:
+                pass
+            else:
+                likelihood = likelihood_update(lamda, series, paras)
+                # print "likelihood value:", likelihood
+                if likelihood_old != 0 and likelihood < likelihood_old:
+                    print "error: decreasing likelihood"
+                    print paras_old
+                    # return paras_old
+                likelihood_old = likelihood
+
+            ############# E step #####################
+
+            prob = prob_update(lamda, series, prob)
+
+            ############# M step #####################
+
+            paras_old[:] = paras[:]
+            ########## Q test in M step #########
+            # Q_old = Q_update(lamda, series, prob, paras)
+            paras_new = paras_update(prob, series, paras)
+            lamda = lamda_update(paras_new, lamda)
+            improve = improve_cal(paras_old, paras_new)
+            paras = paras_new
+            ########### Q test in M step #########
+            # Q = Q_update(lamda, series, prob, paras)
+            # if Q< Q_old:
+            #     print "error: decreasing Q"
+            #     print "Q_old:", Q_old, " Q:", Q
+
+            iteration += 1
+            if iteration >= MAX_ITERATION:
+                break
+        if converge(improve, THRESHOLD):
+            print "convergent"
+            print "iteration:", iteration
+            print "paras:", paras
         else:
-            likelihood = likelihood_update(lamda, series, paras)
-            print "likelihood value:", likelihood
-            if likelihood_old != 0 and likelihood < likelihood_old:
-                print "error: decreasing likelihood"
-                print paras_old
-                # return paras_old
-            likelihood_old = likelihood
-
-        ############# E step #####################
-
-        prob = prob_update(lamda, series, prob)
-
-        ############# M step #####################
-
-        paras_old[:] = paras[:]
-        ########## Q test in M step #########
-        # Q_old = Q_update(lamda, series, prob, paras)
-        paras_new = paras_update(prob, series, paras)
-        lamda = lamda_update(paras_new, lamda)
-        improve = improve_cal(paras_old, paras_new)
-        paras = paras_new
-        ########### Q test in M step #########
-        # Q = Q_update(lamda, series, prob, paras)
-        # if Q< Q_old:
-        #     print "error: decreasing Q"
-        #     print "Q_old:", Q_old, " Q:", Q
-
-        iteration +=1
-        if iteration >= MAX_ITERATION:
-            break
-    if converge(improve, THRESHOLD):
-        print "convergent"
-        print "iteration:", iteration
-        print "paras:", paras
-    else:
-        print "not convergent"
-        print "paras:", paras
-        print "paras_old", paras_old
-    return paras
+            print "not convergent"
+            print "paras:", paras
+            print "paras_old", paras_old
+        print "likelihood:", likelihood
+        if likelihood_largest == 0:
+            likelihood_largest = likelihood
+            paras_best = paras[:]
+        else:
+            if likelihood > likelihood_largest:
+                paras_best = paras[:]
+                likelihood_largest = likelihood
+        print "largest likelihood:", likelihood_largest
+        print "best paras:", paras_best
+    return paras_best
 
 def paras_init(paras):
 
-    paras[0] = 0.8 # alpha1
-    paras[1] = 0.8 # alpha2
-    paras[2] = 0.8 # yita11
-    paras[3] = 0.8 # yita12
-    paras[4] = 0.8 # yita22
-    paras[5] = 0.8 # yita21
-    paras[6] = 1.0 # sigma11
-    paras[7] = 1.0 # sigma12
-    paras[8] = 1.0 # sigma22
-    paras[9] = 1.0 # sigma21
+    paras[0] = random.random() # alpha1
+    paras[1] = random.random() # alpha2
+    paras[2] = random.random() # yita11
+    paras[3] = random.random() # yita12
+    paras[4] = random.random() # yita22
+    paras[5] = random.random() # yita21
+    paras[6] = random.random() # sigma11
+    paras[7] = random.random() # sigma12
+    paras[8] = random.random() # sigma22
+    paras[9] = random.random() # sigma21
     return paras
 
 
@@ -209,11 +264,11 @@ def converge(improve, THRESHOLD):
     return 1
 
 def series_prep():
-    series = [[1,2],[3,4],[5,5],[6,9],[12,18],[16,18],[18,16],[19,14],[20,13],[13,12],[11,11],[10,10],[10,10],[9,9],[8,8],[8,8],[7,7],[7,7],[7,7],[6,6],[6,6],[6,6],[6,6],[4,4],[4,4]]
-    for i in range(len(series)):
-        temp = series[i][0]
-        series[i][0] = series[i][1]
-        series[i][1] = temp
+    series = [[1,2],[3,4],[5,5],[6,9],[12,18],[20,36],[55,98],[150,140],[34,55],[13,34],[11,11],[10,10],[10,10],[9,9],[8,8],[8,8],[7,7],[7,7],[7,7],[6,6],[6,6],[6,6],[6,6],[4,4],[4,4]]
+    # for i in range(len(series)):
+    #     temp = series[i][0]
+    #     series[i][0] = series[i][1]
+    #     series[i][1] = temp
     return series
 
 def likelihood_update(lamda, series, paras):
@@ -224,8 +279,11 @@ def likelihood_update(lamda, series, paras):
         lamda_sum[i][0] = sum([series[j][0] * lamda[0][i - j] + series[j][1] * lamda[3][i - j] for j in range(i)]) + lamda[4][i]
         lamda_sum[i][1] = sum([series[j][1] * lamda[2][i - j] + series[j][0] * lamda[1][i - j] for j in range(i)]) + lamda[5][i]
     for n in range(2):
-        likelihood += (sum([series[i][n]*math.log(lamda_sum[i][n]) for i in range(len(series))])-
-              series_sum[n]*(1+paras[n*2+2])- series_sum[1-n]*paras[5-n*2])
+        try:
+            likelihood += (sum([series[i][n]*math.log(lamda_sum[i][n]) for i in range(len(series))])-
+                  series_sum[n]*(1+paras[n*2+2])- series_sum[1-n]*paras[5-n*2])
+        except ValueError,e:
+            print series_sum[n], paras[n*2+2], series_sum[1-n], paras[5-n*2]
     return likelihood
 
 def Q_update(lamda, series, prob, paras):
